@@ -1,0 +1,40 @@
+{
+  "name": "spl-claude-marketplace",
+  "owner": {
+    "name": "SPL-BGU"
+  },
+  "metadata": {
+    "description": "Claude Code skills for the SPL lab @ BGU — shared dev workflows and SLURM cluster operations.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "dev-workflows",
+      "description": "Shared development workflow skills — /brainstorm, /plan-review-simplify, /debug-and-simplify, /development-log, /simplify, /specialist. Bundles the simplifier and specialist subagents. Pure skills, no MCP server.",
+      "author": {
+        "name": "SPL-BGU"
+      },
+      "license": "MIT",
+      "version": "1.0.0",
+      "source": "./plugins/dev-workflows",
+      "homepage": "https://github.com/SPL-BGU/spl-claude-marketplace",
+      "repository": "https://github.com/SPL-BGU/spl-claude-marketplace",
+      "category": "workflow",
+      "keywords": ["workflow", "planning", "debugging", "simplification", "brainstorm", "subagents"]
+    },
+    {
+      "name": "cluster-ops",
+      "description": "Operate the BGU SLURM cluster from a local repo — queue status + pending-reason, submit/cancel, sync results, post-mortem (right-size --mem from sacct/MaxRSS), prioritize pending tasks. Requires one-time setup (see the skill's SETUP.md).",
+      "author": {
+        "name": "SPL-BGU"
+      },
+      "license": "MIT",
+      "version": "1.0.0",
+      "source": "./plugins/cluster-ops",
+      "homepage": "https://github.com/SPL-BGU/spl-claude-marketplace",
+      "repository": "https://github.com/SPL-BGU/spl-claude-marketplace",
+      "category": "cluster",
+      "keywords": ["slurm", "hpc", "cluster", "squeue", "sacct", "rsync", "bgu"]
+    }
+  ]
+}

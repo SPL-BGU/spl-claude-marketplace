@@ -1,0 +1,437 @@
+#!/usr/bin/env bash
+# Cluster status snapshot — queue + per-results-dir progress with Δ vs last call.
+#
+# Default mode: one row per remote results dir matching $RESULTS_DIR_GLOB.
+# Matrix mode (--matrix): N-model × M-cell sweep view, driven by
+#   status.config.json next to this script. See SETUP.md §5.
+#
+# One SSH call gathers `squeue` + per-dir `wc -l trials.jsonl`. Local Python
+# diffs against $STATE_FILE (default ~/.cache/cluster-ops-status.json) and
+# renders header / what-changed / progress / Δ / roll-up / queue sections.
+#
+# Output mode (auto by stdout TTY-detect):
+#   --terminal / --pretty   ANSI-coloured aligned text (default when TTY)
+#   --md                    GitHub-flavoured markdown (default when piped)
+#   --no-color              suppress ANSI codes in terminal mode
+#
+# Env (load via cluster-ops.env if present):
+#   REMOTE_USER, REMOTE_HOST, REPO_REMOTE   (required)
+#   REMOTE_RESULTS                          (default ~/$REPO_REMOTE/results)
+#   RESULTS_DIR_GLOB                        (default slurm_*)
+#   STATE_FILE                              (default ~/.cache/cluster-ops-status.json)
+#
+# Cache: $STATE_FILE is local-only state. Safe to `rm` to reset.
+
+set -eo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+for arg in "$@"; do
+    case "$arg" in -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;; esac
+done
+
+[ -f "$SCRIPT_DIR/../cluster-ops.env" ] && . "$SCRIPT_DIR/../cluster-ops.env"
+
+: "${REMOTE_USER:?REMOTE_USER not set — see SETUP.md}"
+: "${REMOTE_HOST:?REMOTE_HOST not set — see SETUP.md}"
+: "${REPO_REMOTE:?REPO_REMOTE not set — see SETUP.md}"
+
+REMOTE_RESULTS="${REMOTE_RESULTS:-\$HOME/$REPO_REMOTE/results}"
+RESULTS_DIR_GLOB="${RESULTS_DIR_GLOB:-slurm_*}"
+STATE_FILE="${STATE_FILE:-$HOME/.cache/cluster-ops-status.json}"
+
+mode="auto"
+color="auto"
+matrix=0
+for arg in "$@"; do
+    case "$arg" in
+        --md|--markdown)        mode="md" ;;
+        --terminal|--pretty)    mode="terminal" ;;
+        --no-color)             color="off" ;;
+        --matrix)               matrix=1 ;;
+        -h|--help)              sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *)                      printf 'unknown flag: %s\n' "$arg" >&2; exit 2 ;;
+    esac
+done
+
+if [ "$matrix" = "1" ] && [ ! -f "$SCRIPT_DIR/../status.config.json" ]; then
+    echo "ERROR: --matrix needs status.config.json next to the scripts. See SETUP.md §5." >&2
+    exit 2
+fi
+
+mkdir -p "$(dirname "$STATE_FILE")"
+
+# Single SSH: dump queue + per-cell trial counts as two delimited blocks.
+remote_payload=$(ssh "${REMOTE_USER}@${REMOTE_HOST}" "bash -s" \
+    "$REMOTE_USER" "$REMOTE_RESULTS" "$RESULTS_DIR_GLOB" <<'REMOTE'
+set -eo pipefail
+USER="$1"
+RESULTS="$2"
+GLOB="$3"
+RESULTS=$(eval echo "$RESULTS")
+echo "=== queue ==="
+# -r expands array ranges so each pending task is a separate row.
+squeue -u "$USER" -r -h -o '%i|%j|%T|%M|%R' 2>/dev/null | sort || true
+echo "=== counts ==="
+shopt -s nullglob
+for d in "$RESULTS/"$GLOB/; do
+    [ -d "$d" ] || continue
+    n=$(wc -l < "$d/trials.jsonl" 2>/dev/null || echo 0)
+    printf '%s\t%s\n' "$n" "$(basename "$d")"
+done
+echo "=== end ==="
+REMOTE
+)
+
+CONFIG_PATH=""
+[ "$matrix" = "1" ] && CONFIG_PATH="$SCRIPT_DIR/../status.config.json"
+
+python3 - "$remote_payload" "$STATE_FILE" "$mode" "$color" "$CONFIG_PATH" "$RESULTS_DIR_GLOB" <<'PY'
+import json, os, re, sys, time
+
+payload, state_file, mode_arg, color_arg, config_path, results_glob = sys.argv[1:7]
+use_matrix = bool(config_path)
+
+# ---- Parse SSH payload into queue + count lines ----
+sections, cur = {}, None
+for line in payload.splitlines():
+    if line.startswith("=== "):
+        cur = line.strip("= ").strip()
+        sections[cur] = []
+    elif cur is not None:
+        sections[cur].append(line)
+queue_raw  = [l for l in sections.get("queue",  []) if l.strip()]
+count_raw  = [l for l in sections.get("counts", []) if l.strip()]
+
+# Counts as {dirname: trials}
+raw_counts = {}
+for line in count_raw:
+    n_str, _, dirname = line.partition("\t")
+    try: n = int(n_str)
+    except ValueError: continue
+    raw_counts[dirname] = n
+
+# ---- Queue ----
+queue = []
+for line in queue_raw:
+    parts = line.split("|", 4)
+    if len(parts) != 5: continue
+    queue.append(dict(zip(("jid","jname","state","elapsed","reason"), parts)))
+
+# ---- Diff timestamp ----
+prev_state = {}
+if os.path.exists(state_file):
+    try: prev_state = json.load(open(state_file))
+    except Exception: prev_state = {}
+prev_ts = prev_state.get("timestamp")
+now_ts = int(time.time())
+window_s = (now_ts - prev_ts) if prev_ts else None
+
+def fmt_window(s):
+    if s is None: return None
+    if s < 60: return f"{s}s"
+    if s < 3600: return f"{s//60}m"
+    return f"{s/3600:.1f}h"
+window_str = fmt_window(window_s)
+
+# =========================================================================
+# Matrix mode and flat mode share the SSH payload but render differently.
+# =========================================================================
+
+if use_matrix:
+    # ---------- Matrix mode (config-driven) ----------
+    cfg = json.load(open(config_path))
+    ROSTER = cfg["roster"]
+    DISPLAY = cfg.get("display_names", {m: m for m in ROSTER})
+    CELLS = [(c["think"], c["cond"]) for c in cfg["cells"]]
+    DENOM_VAL = int(cfg["denominator"])
+    DENOM = {c: DENOM_VAL for _, c in CELLS}
+    TIME_LIMIT_H = int(cfg.get("time_limit_hours", 72))
+    COL_HEADERS = [f"{th} / {c}" for th, c in CELLS]
+
+    # ---- Match dirnames to (model, think, cond) by prefix ----
+    # Sort by length desc so that when one model name is a prefix of another
+    # (roster has both "model" and "model_v2"), the longer one wins.
+    _roster_sorted_for_dirs = sorted(ROSTER, key=len, reverse=True)
+    counts, unknown = {}, []
+    for dirname, n in raw_counts.items():
+        # Strip the leading "slurm_" if present (common case); fall back to whole.
+        rem = dirname[len("slurm_"):] if dirname.startswith("slurm_") else dirname
+        matched = None
+        for m in _roster_sorted_for_dirs:
+            if rem.startswith(m + "_"):
+                tail = rem[len(m)+1:]
+                for th in ("on", "off", "default"):
+                    if tail.startswith(th + "_"):
+                        cond = tail[len(th)+1:]
+                        # Strip trailing _<jobid> if present.
+                        cond_no_jid = re.sub(r'_\d+$', '', cond)
+                        if cond in DENOM:
+                            matched = (m, th, cond)
+                        elif cond_no_jid in DENOM:
+                            matched = (m, th, cond_no_jid)
+                        break
+                break
+        if matched: counts[matched] = n
+        else:       unknown.append(dirname)
+
+    # ---- Match queue tasks to cells (for ▶ / PD icons) ----
+    # Anchor model tokens on `_` or string boundaries so e.g. "model" doesn't
+    # mis-attribute a "model-v2" job. Sort roster by length desc so longer
+    # tokens win when one model name is a prefix of another.
+    _roster_sorted = sorted(ROSTER, key=len, reverse=True)
+    def _match_model(jname):
+        for m in _roster_sorted:
+            if re.search(rf'(?:^|_){re.escape(m)}(?:_|$)', jname):
+                return m
+        return None
+
+    def jname_to_cell(jname):
+        m = _match_model(jname)
+        if not m: return None
+        for th in ("on", "off", "default"):
+            if re.search(rf'_{th}(?:_|$)', jname):
+                for c in DENOM:
+                    if (m, th, c) in counts:
+                        return (m, th, c)
+                for c in DENOM:
+                    return (m, th, c)
+        # No think marker found — pick first cell of model.
+        for th, c in CELLS:
+            return (m, th, c)
+        return None
+
+    def jname_model(jname):
+        return _match_model(jname)
+
+    cell_running, cell_pending, model_pending = {}, {}, set()
+    for q in queue:
+        cell = jname_to_cell(q["jname"])
+        if cell:
+            if q["state"] == "RUNNING":   cell_running[cell] = q
+            elif q["state"] == "PENDING": cell_pending[cell] = q
+        elif q["state"] == "PENDING":
+            m = jname_model(q["jname"])
+            if m: model_pending.add(m)
+
+    prev_counts = {tuple(k.split("|")): v for k, v in prev_state.get("counts", {}).items()
+                   if len(k.split("|")) == 3}
+
+    deltas = {}
+    for cell, n in counts.items():
+        prev = prev_counts.get(cell, 0)
+        d = n - prev
+        denom = DENOM[cell[2]]
+        pace_s = (window_s / d) if (d > 0 and window_s) else None
+        eta_h = ((denom - n) * pace_s / 3600) if (pace_s and n < denom) else None
+        deltas[cell] = {"now":n, "prev":prev, "delta":d, "denom":denom,
+                        "pct":100*n/denom if denom else 0, "pace_s":pace_s, "eta_h":eta_h}
+
+    done_now, started_now = [], []
+    if prev_ts:
+        for cell, d in deltas.items():
+            if d["now"] >= d["denom"] and 0 < d["prev"] < d["denom"]:
+                done_now.append((cell, d["prev"]))
+            elif d["prev"] == 0 and d["now"] > 0:
+                started_now.append((cell, d["now"]))
+
+    def cell_status(cell):
+        if cell not in counts:
+            if cell in cell_pending or cell[0] in model_pending:
+                return "pending_fresh"
+            return "empty"
+        n = counts[cell]; denom = DENOM[cell[2]]
+        if n >= denom: return "done"
+        grew = prev_ts is not None and deltas.get(cell, {}).get("delta", 0) > 0
+        if grew or cell in cell_running: return "growing"
+        if cell in cell_pending or cell[0] in model_pending:
+            return "pending_rerun" if n > 0 else "pending_fresh"
+        if n > 0: return "stalled"
+        return "empty"
+
+    def cell_label(cell):
+        m, th, c = cell
+        return f"{DISPLAY.get(m, m)} {th}/{c}"
+
+    def parse_elapsed_h(s):
+        if not s or s == "0:00": return 0.0
+        days = 0
+        if "-" in s:
+            d, _, s = s.partition("-"); days = int(d)
+        parts = s.split(":")
+        if len(parts) == 3: h, mi, se = parts
+        elif len(parts) == 2: h, mi, se = "0", parts[0], parts[1]
+        else: return 0.0
+        return days*24 + int(h) + int(mi)/60 + int(se)/3600
+
+    done_cnt = sum(1 for d in deltas.values() if d["now"] >= d["denom"])
+    total_expected = len(ROSTER) * len(CELLS)
+    total_now = sum(d["now"] for d in deltas.values())
+    total_denom = len(ROSTER) * sum(DENOM[c] for _, c in CELLS)
+    coverage = (100*total_now/total_denom) if total_denom else 0
+
+    watch = []
+    for cell, d in deltas.items():
+        if cell not in cell_running: continue
+        elapsed_h = parse_elapsed_h(cell_running[cell]["elapsed"])
+        if d["eta_h"] is not None and elapsed_h + d["eta_h"] > 0.9 * TIME_LIMIT_H:
+            watch.append(f"{cell_label(cell)} ({elapsed_h:.0f}h+{d['eta_h']:.0f}h ETA → over 0.9×{TIME_LIMIT_H}h)")
+
+    run_jids = sorted({q["jid"] for q in cell_running.values()})
+    running_jobs = [q for q in queue if q["state"] == "RUNNING"]
+    pending_jobs = [q for q in queue if q["state"] == "PENDING"]
+    growing_cells = sorted(((c,d) for c,d in deltas.items() if d["delta"] > 0),
+                           key=lambda x: x[1]["pct"], reverse=True) if prev_ts else []
+
+    def render_markdown():
+        out = []
+        if window_str is not None:
+            out.append(f"## Status — ~{window_str} since last check\n")
+        else:
+            out.append("## Status — first run (no prior state)\n")
+
+        if done_now or started_now:
+            out.append("### What changed")
+            for cell, prev in done_now:
+                out.append(f"- ✓ **{cell_label(cell)}** flipped to 100% (was {prev}/{DENOM[cell[2]]})")
+            for cell, n in started_now:
+                out.append(f"- ▶🆕 **{cell_label(cell)}** started ({n}/{DENOM[cell[2]]} trials)")
+            out.append("")
+
+        out.append(f"### Per-cell progress (denominator {DENOM_VAL})")
+        out.append("| Model | " + " | ".join(COL_HEADERS) + " |")
+        out.append("|" + "|".join(["---"] * (1 + len(COL_HEADERS))) + "|")
+        icon_md = {"done":"✓", "growing":"▶", "stalled":"⏸",
+                   "pending_rerun":"PD↻", "pending_fresh":"PD", "empty":"_-_"}
+        for m in ROSTER:
+            row = [f"**{DISPLAY.get(m, m)}**"]
+            for th, c in CELLS:
+                cell = (m, th, c)
+                st = cell_status(cell)
+                if cell in counts:
+                    n = counts[cell]; denom = DENOM[c]
+                    pct = 100*n/denom if denom else 0
+                    row.append(f"{n}/{denom} (**{pct:.1f}%**) {icon_md[st]}")
+                elif st == "pending_fresh":
+                    row.append("0/— PD")
+                else:
+                    row.append("0/— _-_")
+            out.append("| " + " | ".join(row) + " |")
+        out.append("")
+
+        hdr = f" (window: ~{window_str})" if window_str else " (first run — no delta)"
+        out.append(f"### Δ since last status{hdr}")
+        if growing_cells:
+            out.append("| Cell | Prev → Now | Δ | pace | ETA |")
+            out.append("|---|---|---|---|---|")
+            for cell, d in growing_cells:
+                prev_now = f"{d['prev']} → **{d['now']}**" + (" ✓" if d['now'] >= d['denom'] else "")
+                pace = f"~{d['pace_s']:.0f} s/trial" if d["pace_s"] else "—"
+                eta  = "**DONE**" if d['now'] >= d['denom'] else (f"~{d['eta_h']:.1f}h" if d['eta_h'] is not None else "—")
+                out.append(f"| {cell_label(cell)} | {prev_now} | +{d['delta']} | {pace} | {eta} |")
+        else:
+            out.append("_no cells advanced this window_")
+        out.append("")
+
+        out.append("### Roll-up")
+        out.append(f"- **Done**: {done_cnt} / {total_expected} cells ({100*done_cnt//total_expected if total_expected else 0}%)")
+        out.append(f"- **Trial coverage**: {total_now/1000:.1f}K / {total_denom/1000:.0f}K ≈ **{coverage:.0f}%**")
+        out.append(f"- **Running**: {len(cell_running)} cells" + (f" (jobs {', '.join(run_jids)})" if run_jids else ""))
+        out.append(f"- **Watch list**: {'; '.join(watch) if watch else 'none'}")
+
+        if running_jobs or pending_jobs:
+            out.append("")
+            out.append("### Queue")
+            if running_jobs:
+                out.append(f"- **Running** ({len(running_jobs)}): " + ", ".join(q["jid"] for q in running_jobs))
+            if pending_jobs:
+                by_reason = {}
+                for q in pending_jobs:
+                    by_reason.setdefault(q["reason"], []).append(q["jid"])
+                out.append(f"- **Pending** ({len(pending_jobs)}): " +
+                           ", ".join(f"{r} ×{len(jids)}" for r, jids in by_reason.items()))
+        if unknown:
+            out.append("")
+            out.append(f"_(skipped {len(unknown)} unmatched dirs: {', '.join(unknown[:3])}{'…' if len(unknown)>3 else ''})_")
+        return "\n".join(out)
+
+    # Saved state uses (model|think|cond) tuples in matrix mode.
+    new_state = {"timestamp": now_ts,
+                 "mode": "matrix",
+                 "counts": {f"{m}|{t}|{c}": n for (m,t,c), n in counts.items()}}
+
+    output = render_markdown()  # matrix view is markdown-only for now
+
+else:
+    # ---------- Flat mode (default) ----------
+    # One row per remote dir. Δ keyed by dirname.
+    prev_counts = prev_state.get("flat_counts", {}) if prev_state.get("mode") == "flat" else {}
+
+    counts = raw_counts  # alias
+    deltas = []
+    for dirname in sorted(counts):
+        n = counts[dirname]
+        prev = prev_counts.get(dirname, 0)
+        d = n - prev
+        pace_s = (window_s / d) if (d > 0 and window_s) else None
+        deltas.append({"dir": dirname, "now": n, "prev": prev, "delta": d, "pace_s": pace_s})
+
+    running_jobs = [q for q in queue if q["state"] == "RUNNING"]
+    pending_jobs = [q for q in queue if q["state"] == "PENDING"]
+    growing = [d for d in deltas if d["delta"] > 0]
+    new_dirs = [d for d in deltas if d["prev"] == 0 and d["now"] > 0 and prev_ts]
+
+    def render_markdown_flat():
+        out = []
+        if window_str is not None:
+            out.append(f"## Status — ~{window_str} since last check\n")
+        else:
+            out.append("## Status — first run (no prior state)\n")
+
+        if new_dirs:
+            out.append("### What changed")
+            for d in new_dirs:
+                out.append(f"- ▶🆕 `{d['dir']}` started ({d['now']} trials)")
+            out.append("")
+
+        out.append(f"### Progress ({len(counts)} dirs matching `{results_glob}`)")
+        if not counts:
+            out.append("_no remote results dirs found_")
+        else:
+            out.append("| Dir | Trials | Δ | pace |")
+            out.append("|---|---|---|---|")
+            for d in deltas:
+                pace = f"~{d['pace_s']:.0f} s/trial" if d["pace_s"] else "—"
+                delta = f"+{d['delta']}" if d["delta"] > 0 else "0"
+                out.append(f"| `{d['dir']}` | {d['now']} | {delta} | {pace} |")
+        out.append("")
+
+        out.append("### Roll-up")
+        total = sum(c for c in counts.values())
+        out.append(f"- **Dirs**: {len(counts)}")
+        out.append(f"- **Total trials**: {total}")
+        out.append(f"- **Running jobs**: {len(running_jobs)}" +
+                   (f" ({', '.join(q['jid'] for q in running_jobs)})" if running_jobs else ""))
+        if pending_jobs:
+            by_reason = {}
+            for q in pending_jobs:
+                by_reason.setdefault(q["reason"], []).append(q["jid"])
+            out.append(f"- **Pending**: {len(pending_jobs)} (" +
+                       ", ".join(f"{r} ×{len(jids)}" for r, jids in by_reason.items()) + ")")
+        return "\n".join(out)
+
+    new_state = {"timestamp": now_ts,
+                 "mode": "flat",
+                 "flat_counts": dict(counts)}
+    output = render_markdown_flat()
+
+# ---- Mode selection (terminal renderer only implemented for matrix in v1;
+# flat mode renders as markdown either way since the table is already compact).
+if mode_arg == "auto":
+    mode_arg = "terminal" if sys.stdout.isatty() else "md"
+
+print(output)
+
+with open(state_file, "w") as f:
+    json.dump(new_state, f)
+PY

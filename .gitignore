@@ -1,0 +1,20 @@
+.DS_Store
+*.pyc
+__pycache__/
+.idea/
+.vscode/
+
+# Claude Code local-only state
+.claude/settings.local.json
+
+# cluster-ops: per-user config and local caches (the .example is committed)
+plugins/cluster-ops/skills/cluster-ops/cluster-ops.env
+plugins/cluster-ops/skills/cluster-ops/status.config.json
+plugins/cluster-ops/skills/cluster-ops/preflight.local.sh
+
+# Environments
+.env
+.envrc
+.venv
+venv/
+env/

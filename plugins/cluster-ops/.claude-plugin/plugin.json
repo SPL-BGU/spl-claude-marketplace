@@ -1,0 +1,12 @@
+{
+  "name": "cluster-ops",
+  "version": "1.0.0",
+  "description": "Operate the BGU SLURM cluster from a local repo — queue status, submit/cancel, sync results, post-mortem, and pending-task prioritization. Six helper scripts plus a skill prompt. Requires one-time setup (see skills/cluster-ops/SETUP.md).",
+  "author": {
+    "name": "SPL-BGU"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/SPL-BGU/spl-claude-marketplace",
+  "repository": "https://github.com/SPL-BGU/spl-claude-marketplace",
+  "keywords": ["slurm", "hpc", "cluster", "squeue", "sacct", "rsync", "bgu"]
+}
