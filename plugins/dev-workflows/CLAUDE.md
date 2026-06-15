@@ -22,4 +22,4 @@ Both subagents are pinned to `model: opus`. With no Opus access, edit each agent
 ## Notes
 
 - Skills here are generic — no project-specific assumptions. Tailor `/development-log` paths and add a project `CLAUDE.md` / `KNOWN_ISSUES.md` to sharpen `/plan-review-simplify` and `/debug-and-simplify`.
-- The `specialist` agent is domain-agnostic by design. To make a sharper domain expert, copy `agents/specialist.md`, rename it, and add authoritative sources + canonical examples (see `examples/plugin-specialist.md` at the repo root for a worked example).
+- The `specialist` agent is domain-agnostic by design. To make a sharper domain expert, copy `agents/specialist.md`, rename it, and add authoritative sources + canonical examples (see the live `plugin-specialist` agent at `.claude/agents/plugin-specialist.md` in the marketplace repo for a worked example).

@@ -1,6 +1,6 @@
 {
   "name": "dev-workflows",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Shared development workflow skills (brainstorm, plan-review-simplify, debug-and-simplify, development-log, simplify, specialist) plus the simplifier and specialist subagents they fork. Pure skills, no MCP server.",
   "author": {
     "name": "SPL-BGU"

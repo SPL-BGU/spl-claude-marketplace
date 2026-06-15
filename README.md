@@ -59,7 +59,7 @@ Skip this plugin if you don't use the cluster.
 This is the lab's repo — improvements are welcome via pull request.
 
 - **Edit a skill** → change the relevant `plugins/<name>/skills/<skill>/SKILL.md`, then bump that plugin's `version` in both its `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`.
-- **Add a plugin** → follow the checklist in [`CLAUDE.md`](CLAUDE.md#adding-a-plugin-checklist). Each plugin must be self-contained under `plugins/<name>/`.
+- **Add a plugin** → follow the checklist in [`CLAUDE.md`](CLAUDE.md#adding-a-plugin-checklist). Each plugin must be self-contained under `plugins/<name>/`. Run `/plugin-specialist <what you want to build>` first — a dev-only command that researches current plugin/MCP docs and comparable plugins, then recommends the simplest architecture.
 - **Conventions** are encoded as rules under `.claude/rules/` (`simplification`, `plugin-marketplace`, `plugin-development`) and load automatically when you open this repo in Claude Code.
 
 Open a PR against `main`; describe what changed and which plugin versions you bumped.
@@ -82,8 +82,10 @@ spl-claude-marketplace/
 │       ├── .claude-plugin/plugin.json
 │       ├── CLAUDE.md
 │       └── skills/cluster-ops/   ← SKILL.md, SETUP.md, scripts/, references/
-├── .claude/rules/                ← dev-only conventions (not installed by users)
-├── examples/                     ← reference, not installed
+├── .claude/                      ← dev-only tooling (not installed by users)
+│   ├── rules/                    ← conventions, auto-loaded in this repo
+│   ├── agents/plugin-specialist.md
+│   └── skills/plugin-specialist/ ← /plugin-specialist dev command
 ├── CLAUDE.md
 └── LICENSE
 ```
