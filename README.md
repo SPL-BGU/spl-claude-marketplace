@@ -25,6 +25,22 @@ To update later: `/plugin marketplace update spl-claude-marketplace`.
 
 > Replace `SPL-BGU/spl-claude-marketplace` with the actual org/repo path if it differs on your GitHub. For a private repo, make sure your `gh` / git auth can reach it.
 
+### Antigravity
+
+The skills are plain `SKILL.md` files, so they also work in **Google Antigravity**. Clone this repo, then from its root run:
+
+```bash
+# Preview what would be linked (no changes)
+bash install_marketplace.sh
+
+# Symlink every skill into ~/.gemini/antigravity/skills/
+bash install_marketplace.sh --install
+```
+
+`--install` symlinks each skill into `~/.gemini/antigravity/skills/`, after asking for confirmation. Because it symlinks, a `git pull` updates the skills in place — no re-install needed. Use `--help` to list the discovered skills.
+
+> These plugins are skills-only, so there's no MCP server to configure. The `/specialist` and `/simplify` skills fork Claude subagents — that part is Claude Code-specific, so they're less capable outside Claude Code.
+
 ---
 
 ## What's inside
@@ -86,6 +102,7 @@ spl-claude-marketplace/
 │   ├── rules/                    ← conventions, auto-loaded in this repo
 │   ├── agents/plugin-specialist.md
 │   └── skills/plugin-specialist/ ← /plugin-specialist dev command
+├── install_marketplace.sh        ← Antigravity skill installer
 ├── CLAUDE.md
 └── LICENSE
 ```
