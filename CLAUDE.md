@@ -9,6 +9,7 @@ This repository is a Claude Code **plugin marketplace** for the SPL lab @ BGU. E
 - `.claude/` — **development-only** tooling for contributors, never installed by end users:
   - `.claude/rules/` — the conventions Claude auto-loads while you work in this repo (see below).
   - `.claude/skills/` + `.claude/agents/` — dev commands. Today: `/plugin-specialist`, which forks the `plugin-specialist` agent (research-first plugin/MCP-server architecture advice).
+- `install_marketplace.sh` — installs the skills for **Google Antigravity** (Claude Code uses `/plugin` instead). Auto-discovers skills under `plugins/*/skills/*/` and symlinks them, so adding a skills-only plugin needs no change here.
 
 ## Available plugins
 
