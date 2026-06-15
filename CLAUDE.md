@@ -6,8 +6,9 @@ This repository is a Claude Code **plugin marketplace** for the SPL lab @ BGU. E
 
 - `.claude-plugin/marketplace.json` — marketplace catalog listing every plugin (name, version, source).
 - `plugins/<name>/` — each plugin, fully self-contained, with its own `.claude-plugin/plugin.json`, `CLAUDE.md`, and `skills/` (and `agents/` where relevant).
-- `.claude/rules/` — **development-only** tooling for contributors. Auto-loaded when working in this repo; never installed by end users.
-- `examples/` — reference material (e.g. a worked subagent specialization). Not installed.
+- `.claude/` — **development-only** tooling for contributors, never installed by end users:
+  - `.claude/rules/` — the conventions Claude auto-loads while you work in this repo (see below).
+  - `.claude/skills/` + `.claude/agents/` — dev commands. Today: `/plugin-specialist`, which forks the `plugin-specialist` agent (research-first plugin/MCP-server architecture advice).
 
 ## Available plugins
 
@@ -23,6 +24,8 @@ These three rules under `.claude/rules/` encode the conventions; Claude auto-loa
 - `plugin-development.md` — skill conventions, architecture tiers, verification.
 
 ### Adding a plugin (checklist)
+
+Before you start, consider `/plugin-specialist <what you want to build>` — it fetches current plugin/MCP docs, studies comparable plugins, and recommends the simplest architecture tier. Then:
 
 1. Plugin is fully self-contained under `plugins/<name>/`, with no cross-plugin imports.
 2. Has a `.claude-plugin/plugin.json`, a `CLAUDE.md`, and at least one component (a `skills/` directory and/or an MCP server). Skills-only plugins omit `.mcp.json` and `.claude/settings.json`.

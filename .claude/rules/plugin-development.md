@@ -8,7 +8,7 @@ paths:
 
 ### Architecture tiers — simplest first
 
-Choose the simplest tier that works.
+Choose the simplest tier that works. When unsure which tier or pattern fits, consult `/plugin-specialist` — it fetches current docs and studies comparable plugins before recommending.
 
 - **Tier 1 — Pure script** (preferred): pip/npm-installable deps only, isolated in a venv / `node_modules`.
 - **Tier 2 — System dependencies**: wraps brew/apt/cargo-installable tools; check for the tool and install (or fail with a clear message) before launching.
